@@ -36,8 +36,11 @@ _LOG = logging.getLogger(LOGGER_NAME)
 
 def getargs():
     """Parse command line arguments"""
-    desc = "Scan nix artifact for vulnerabilities with vulnix, grype, and osv.py"
-    epil = f"Example: ./{os.path.basename(__file__)} /path/to/sbom.json"
+    desc = (
+        "Scan nix artifact or CycloneDX SBOM for vulnerabilities with grype, "
+        "osv.py, and vulnix."
+    )
+    epil = f"Example: ./{os.path.basename(__file__)} /path/to/nix/out/or/drv"
     parser = argparse.ArgumentParser(description=desc, epilog=epil)
     helps = "Target derivation path or nix out path"
     parser.add_argument("TARGET", help=helps, type=pathlib.Path)
@@ -46,10 +49,24 @@ def getargs():
     helps = "Path to output file (default: ./vulns.csv)"
     parser.add_argument("--out", nargs="?", help=helps, default="vulns.csv")
     helps = (
-        "Include target's buildtime dependencies to the scan."
+        "Include target's buildtime dependencies to the scan. "
         "By default, only runtime dependencies are scanned."
     )
     parser.add_argument("--buildtime", help=helps, action="store_true")
+    helps = (
+        "Indicate that TARGET is a cdx SBOM instead of path to nix artifact. "
+        "This allows running vulnxscan using input SBOMs from any tool "
+        "capable of generating cdx SBOM. This option makes it possible to run "
+        "vulnxscan postmortem against any (potentially earlier) release of "
+        "the TARGET. "
+        "Moreover, this option allows using vulnxscan against non-nix targets "
+        "as long as SBOM includes valid CPE identifiers and purls. "
+        "If this option is specified, vulnix scan will not run, since vulnix "
+        "is nix-only and requires components' nix store paths. "
+        "Also, if this option is specified, option '--buildtime' will be "
+        "ignored since target pacakges will be read from the given SBOM."
+    )
+    parser.add_argument("--sbom", help=helps, action="store_true")
     return parser.parse_args()
 
 
@@ -86,6 +103,7 @@ class VulnScan:
     def scan_vulnix(self, target_path, buildtime=False):
         """Run vulnix scan for nix artifact at target_path"""
         _LOG.info("Running vulnix scan")
+        self.df_vulnix = pd.DataFrame()
         # We use vulnix from 'https://github.com/henrirosten/vulnix' to get
         # vulnix support for runtime-only scan ('-C' command-line option)
         # which is currently not available in released version of vulnix.
@@ -191,7 +209,9 @@ class VulnScan:
         df = df.pivot_table(index=group_cols, columns="scanner", values="count")
         # Pivot creates a multilevel index, we'll get rid of it:
         df.reset_index(drop=False, inplace=True)
-        scanners = ["grype", "osv", "vulnix"]
+        scanners = ["grype", "osv"]
+        if self.df_vulnix is not None:
+            scanners.append("vulnix")
         df.reindex(group_cols + scanners, axis=1)
         for scanner_col in scanners:
             if scanner_col not in df:
@@ -201,7 +221,8 @@ class VulnScan:
         # Reformat values in 'scanner' columns
         df["grype"] = df.apply(lambda row: _reformat_scanner(row.grype), axis=1)
         df["osv"] = df.apply(lambda row: _reformat_scanner(row.osv), axis=1)
-        df["vulnix"] = df.apply(lambda row: _reformat_scanner(row.vulnix), axis=1)
+        if "vulnix" in scanners:
+            df["vulnix"] = df.apply(lambda row: _reformat_scanner(row.vulnix), axis=1)
         # Add column 'url'
         df["url"] = df.apply(_vuln_url, axis=1)
         # Sort the data based on the following columns
@@ -285,14 +306,6 @@ def _valid_csv(path):
         return False
 
 
-def _check_nix():
-    _LOG.info("Checking nix installation")
-    # Try running nix-info to check that nix tools are available
-    cmd = "nix-shell -p nix-info --run 'nix-info'"
-    ret = exec_cmd(cmd.split(), raise_on_error=True)
-    _LOG.debug(ret.strip())
-
-
 def _generate_sbom(target_path, buildtime=False):
     _LOG.info("Generating SBOM for target '%s'", target_path)
     sbomnix = pathlib.Path(__file__).parents[2] / "sbomnix" / "main.py"
@@ -319,12 +332,15 @@ def main():
     if not args.TARGET.exists():
         _LOG.fatal("Invalid path: '%s'", args.TARGET)
         sys.exit(1)
-    _check_nix()
     target_path = args.TARGET.as_posix()
-    sbom_path = _generate_sbom(target_path, args.buildtime)
 
     scanner = VulnScan()
-    scanner.scan_vulnix(target_path, args.buildtime)
+    if args.sbom:
+        sbom_path = args.TARGET.as_posix()
+    else:
+        sbom_path = _generate_sbom(target_path, args.buildtime)
+        scanner.scan_vulnix(target_path, args.buildtime)
+
     scanner.scan_grype(sbom_path)
     scanner.scan_osv(sbom_path)
     scanner.report(args.out, target_path, args.buildtime)
