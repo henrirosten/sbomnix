@@ -84,7 +84,7 @@ $ nix-env -f default.nix --install
 In the below examples, we use Nix package `wget` as an example target.
 To install wget and print out its out-path on your local system, try something like:
 ```bash
-$ nix-shell -p wget --run exit && nix eval -f '<nixpkgs>' 'wget.outPath'
+$ nix eval -f '<nixpkgs>' 'wget.drvPath'
 "/nix/store/8nbv1drmvh588pwiwsxa47iprzlgwx6j-wget-1.21.3"
 ```
 
