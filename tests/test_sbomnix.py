@@ -157,8 +157,10 @@ def test_sbomnix_depth():
         [
             SBOMNIX,
             TEST_NIX_RESULT,
+            "--buildtime",
             "--csv",
             out_path_csv_1.as_posix(),
+            "--depth=2",
         ]
     )
     assert out_path_csv_1.exists()
@@ -169,6 +171,7 @@ def test_sbomnix_depth():
         [
             SBOMNIX,
             TEST_NIX_RESULT,
+            "--buildtime",
             "--csv",
             out_path_csv_2.as_posix(),
             "--depth=1",
